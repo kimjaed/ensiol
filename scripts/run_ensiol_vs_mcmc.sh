@@ -1,0 +1,31 @@
+#!/bin/bash
+#SBATCH --job-name=EnsIOL_vs_MCMC
+#SBATCH --output=EnsIOL_vs_MCMC_%j.out
+#SBATCH --error=EnsIOL_vs_MCMC_%j.err
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16         # one sample per worker process
+#SBATCH --time=06:00:00
+#SBATCH --mem=16G
+#SBATCH --partition=compute
+##SBATCH --mail-type=BEGIN,END,FAIL
+##SBATCH --mail-user=YOUR_EMAIL
+
+# Submit from the repository root:  sbatch scripts/run_ensiol_vs_mcmc.sh [extra arguments]
+# Extra arguments are passed to run_ensiol_vs_mcmc.py (see its --help).
+export HOMEDIR=/user/$USER
+cd "$SLURM_SUBMIT_DIR"
+
+ml load miniconda/25.9
+PYTHON="$HOMEDIR/.conda/envs/mtpyv2-env/bin/python"       # CONFIRM with `conda env list`
+export PYTHONPATH="$SLURM_SUBMIT_DIR/src:$PYTHONPATH"   # use the checkout without installing it
+
+# One worker process per sample, each single-threaded: stop BLAS from also
+# multithreading inside each worker and oversubscribing the allocated cores.
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
+
+# Finished items are skipped on resubmission, so if the job hits the time
+# limit, just submit it again. -u: unbuffered, so progress appears as it happens.
+# Run run_synthetic.sh first: its per-sample results are reused as EnsIOL's catalogs.
+"$PYTHON" -u scripts/run_ensiol_vs_mcmc.py --data-dir data/kilauea --ensiol-dir outputs/synthetic/per_sample \
+    --out-dir outputs/ensiol_vs_mcmc "$@"

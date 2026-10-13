@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "ensiol: Ensemble Incremental Online Learning for transferable 1-D magnetotelluric inversion"
+type: software
+authors:
+  - family-names: Kim
+    given-names: Jae Deok
+version: 0.1.0
+license: MIT
+repository-code: "https://github.com/kimjaed/ensiol"
+# doi: add the Zenodo DOI after the first release

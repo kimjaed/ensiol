@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ensiol"
+version = "0.1.0"
+description = "Ensemble Incremental Online Learning (EnsIOL) for transferable 1-D magnetotelluric inversion"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Jae Deok Kim" }]
+dependencies = ["numpy", "scipy", "matplotlib"]
+
+[project.optional-dependencies]
+notebooks = ["jupyter", "ipykernel"]
+test = ["pytest"]
+
+[project.scripts]
+ensiol-synthetic = "ensiol.experiments.synthetic:main"
+ensiol-real-data = "ensiol.experiments.real_data:main"
+ensiol-vs-mcmc = "ensiol.experiments.mcmc_comparison:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
