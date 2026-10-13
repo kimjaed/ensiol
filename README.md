@@ -1,4 +1,5 @@
 # EnsIOL: ensemble incremental online learning for geophysical inversion
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23329614.svg)](https://doi.org/10.5281/zenodo.23329614)
 
 Code accompanying the study of **EnsIOL**, a transfer scheme that grows a prior catalog of synthetic
 (model, response) pairs against real observations from a new geologic setting, so that an
