@@ -1,5 +1,5 @@
 """EnsIOL: ensemble incremental online learning for transferable geophysical inversion."""
-from .baselines import PCNConfig, PCNSampler
+from .baselines import PCBasis, PCGridConfig, PCGridSweep, PCNConfig, PCNSampler
 from .catalog import Catalog, MinDistanceCalibrator, Whitener
 from .config import EnsIOLConfig, NoiseModel, ScoringConfig
 from .context import AugmentationRun, ExperimentContext, station_seed
@@ -10,5 +10,5 @@ from .growth import EnsIOL, GrowthResult
 from .metrics import Scorer, rms_log10
 from .snapshots import SnapshotEvaluator
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 __all__ = [n for n in dir() if not n.startswith("_")]

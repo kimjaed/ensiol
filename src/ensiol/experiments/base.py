@@ -43,6 +43,12 @@ class Experiment(ABC):
     def collect(self, items: Sequence[Hashable]) -> None:
         """Aggregate finished items into tables and figures."""
 
+    def prepare(self, todo: Sequence[Hashable]) -> None:
+        """Hook run once in the main process, before the workers fork, when there is work to do.
+
+        Override it for expensive set-up that every item shares (the workers inherit the result).
+        """
+
     # ---- machinery -------------------------------------------------------------
     def _process(self, item):
         try:
@@ -72,6 +78,7 @@ class Experiment(ABC):
         failed, t0 = [], time.time()
         if todo:
             _ACTIVE = self
+            self.prepare(todo)
             can_fork = "fork" in mp.get_all_start_methods()
             if can_fork and nw > 1:
                 with ProcessPoolExecutor(max_workers=nw, mp_context=mp.get_context("fork")) as pool:

@@ -1,4 +1,5 @@
 # EnsIOL: ensemble incremental online learning for geophysical inversion
+
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23329614.svg)](https://doi.org/10.5281/zenodo.23329614)
 
 Code accompanying the study of **EnsIOL**, a transfer scheme that grows a prior catalog of synthetic
@@ -78,18 +79,20 @@ earlier runs. Figures are written to `figures/`.
 | Order | Notebook | Reproduces | Computing time |
 |---|---|---|---|
 | 1 | [`01_fig2_evolution_sample14.ipynb`](notebooks/01_fig2_evolution_sample14.ipynb) | Fig. 2: ensemble of estimates at successive stages of augmentation, synthetic test case 14 | about 1 min |
-| 2 | [`02_fig3_ensiol_vs_mcmc_sample14.ipynb`](notebooks/02_fig3_ensiol_vs_mcmc_sample14.ipynb) | Fig. 3: EnsIOL vs. MCMC, accuracy and misfit against forward-model calls, test case 14 | 3-5 min (includes 20,000 MCMC forward calls) |
+| 2 | [`02_fig3_ensiol_vs_mcmc_sample14.ipynb`](notebooks/02_fig3_ensiol_vs_mcmc_sample14.ipynb) | Fig. 3: EnsIOL vs. MCMC and a naive grid sweep, accuracy and misfit against forward-model calls, test case 14 | 5-8 min (includes 20,000 MCMC forward calls and the simulation of the grids) |
 | 3 | [`03_fig_real_station_keller.ipynb`](notebooks/03_fig_real_station_keller.ipynb) | Real data: ensembles at the Keller station before and after augmentation | about 1 min |
 
 **What you should see.** The notebooks print the manuscript's numbers next to the ones they obtain, so you can
 confirm the replication without looking at the figures.
 
-* Notebook 1: `OK` on all three lines (1,931 forward-model calls, RMS 0.35, nRMS 1.04 for test case 14).
+* Notebook 1: the last row of the printed table: 1,931 models added, RMS 0.35 and nRMS 1.04 for test case 14.
 * Notebook 2: EnsIOL 0.35 and 1.04 at 1,931 calls; MCMC 0.91 and 3.42 at 2,000 calls, and 0.67 and 1.92 at
-  20,000 calls (RMS and nRMS, mean-of-responses convention).
-* Notebook 3 (no manuscript number to compare; reference values for the shipped data): 21 frequencies, the
-  catalog grows by about 1,140 members in 37 iterations, and nRMS falls from about 2.8 to about 0.56. The
-  minimum of the ensemble-mean resistivity is about 5.4 ohm-m in the layer between 1.155 and 1.243 km.
+  20,000 calls (RMS and nRMS, mean-of-responses convention). The grid sweep costs 1,430 forward calls at k = 7
+  and 18,816 at k = 13 for every test case; the notebook prints these next to the manuscript values (`OK`),
+  with its own RMS and nRMS for this case.
+* Notebook 3: 21 frequencies, the catalog grows by about 1,140 members in 37 iterations, and nRMS falls from 2.77
+  to 0.56 (the manuscript values). The minimum of the ensemble-mean resistivity is about 5.4 ohm-m in the layer
+  between 1.155 and 1.243 km.
 
 The figures land in `figures/`: `fig2_evolution_sample_014.{pdf,png}`, `fig3_ensiol_vs_mcmc_sample_014.{pdf,png}`,
 and `fig_ensemble_keller_{before,after}.png` (plus `fig_evolution_keller.png`). Styling is controlled by the
@@ -119,20 +122,23 @@ sample or station, resumable: finished items are skipped on resubmission), submi
 |---|---|---|
 | 1. EnsIOL on the 100 synthetic test cases | `sbatch scripts/run_synthetic.sh` | `outputs/synthetic/` (per-sample results, `metrics.csv`, `all_samples.npz`, calibration) |
 | 2. EnsIOL vs. MCMC catalog growth | `sbatch scripts/run_ensiol_vs_mcmc.sh` | `outputs/ensiol_vs_mcmc/` (reuses the catalogs from step 1) |
-| 3. Real Kilauea stations (those with at least 10 frequencies) | `sbatch scripts/run_real_data.sh` | `outputs/real_data/` |
-| 4. Tables I and II and every number quoted in the text | `python scripts/summarize_metrics.py --mcmc outputs/ensiol_vs_mcmc/results_long.csv --stations outputs/real_data/station_summary.csv --per-station-dir outputs/real_data/per_station --depth-interfaces data/kilauea/kilauea_depth_interfaces_m.txt` | `outputs/tables/` (`table_synthetic.tex`, `table_real.tex`, `summary_numbers.txt`) |
+| 3. Naive grid sweep baseline | `sbatch scripts/run_pc_sweep_baseline.sh` | `outputs/pc_sweep/` (per-sample results, `results_long.csv`, `summary_by_grid.csv`, summary figure) |
+| 4. Real Kilauea stations (those with at least 10 frequencies) | `sbatch scripts/run_real_data.sh` | `outputs/real_data/` |
+| 5. Tables I and II and every number quoted in the text | `python scripts/summarize_metrics.py --mcmc outputs/ensiol_vs_mcmc/results_long.csv --pc-sweep outputs/pc_sweep/results_long.csv --stations outputs/real_data/station_summary.csv --per-station-dir outputs/real_data/per_station --depth-interfaces data/kilauea/kilauea_depth_interfaces_m.txt` | `outputs/tables/` (`table_synthetic.tex`, `table_real.tex`, `summary_numbers.txt`) |
 
-Extra arguments are forwarded, e.g. `sbatch scripts/run_ensiol_vs_mcmc.sh --samples 14 --ensiol-budgets iterations`
-scores EnsIOL after every iteration for one case. `python scripts/<name>.py --help` lists all options.
+Extra arguments are forwarded, e.g. `sbatch scripts/run_ensiol_vs_mcmc.sh --samples 14 --ensiol-budgets iterations --pc-grid`
+scores EnsIOL after every iteration for one case and adds the grid sweep to that case's record.
+`python scripts/<name>.py --help` lists all options.
 Edit the Python path and e-mail lines in the `.sh` files for your account.
 
 **Without a cluster.** The same scripts run directly and use all available cores, e.g.
 `python scripts/run_synthetic.py --out-dir outputs/synthetic`. Finished samples are skipped when you rerun, so an
 interrupted run just continues. On one core step 1 takes roughly half an hour (about 20 s per test case), whereas
 step 2 takes a few minutes per test case because of the 20,000 MCMC forward calls, so it is worth parallelising.
-`--samples 14` restricts any run to one test case.
+`--samples 14` restricts any run to one test case. The grid sweep simulates its grids once (about a minute or two)
+and then needs tens of seconds per sample.
 
-**Station data.** `data/kilauea_stations/` ships only the Keller sounding. Step 3 needs one
+**Station data.** `data/kilauea_stations/` ships only the Keller sounding. Step 4 needs one
 `<station_id>_1d_response.dat` file per station (columns: frequency in Hz, apparent resistivity in ohm-m, phase in
 degrees); put the others there to run the full field application.
 
@@ -148,13 +154,15 @@ src/ensiol/
   enscgp.py       EnsCGP, Estimate                             backward update and the evaluation estimate
   growth.py       EnsIOL, CandidateSelector,                   the growth loop and its parts
                   SurrogateCorrector, GrowthResult
-  baselines.py    PCNSampler, PCNConfig                        MCMC baseline for catalog growth
+  baselines.py    PCNSampler, PCNConfig,                       baselines for catalog growth: MCMC and the
+                  PCGridSweep, PCGridConfig, PCBasis           naive principal-component grid sweep
   metrics.py      Scorer, rms_log10, coverage_tables           accuracy, misfit, calibration
   summary.py      MetricsReport, SyntheticResults, ...         Tables I and II and the numbers quoted in the text
   snapshots.py    SnapshotEvaluator                            the estimate at successive stages of growth
   context.py      ExperimentContext, AugmentationRun           wires the components; runs EnsIOL for one observation
   experiments/    Experiment (base), SyntheticEvaluation,      the cluster experiments, built on one base class
-                  RealDataApplication, EnsIOLvsMCMC
+                  RealDataApplication, EnsIOLvsMCMC,
+                  PCSweepBaseline
   priors/         GabbsValleyStatistics, GMRFPrior,            builds the prior catalog and the test models
                   NewSettingSpec
   plotting/       figure functions (return figures, never show)
@@ -186,7 +194,13 @@ rows = run.evolution_rows(n_rows=5)       # single backward EnsCGP updates at su
   mean model (`RoM`) is always computed and stored as well (`ScoringConfig.nrms_convention`).
 * **Noise** is 10% relative error: 0.2 on log apparent resistivity and 5.71 degrees on phase (`NoiseModel`).
 * **Cost** of augmenting a catalog is the number of forward-model calls made to build it: one per added member for
-  EnsIOL, the total number of sampler calls for MCMC.
+  EnsIOL, the total number of sampler calls for MCMC, and the number of grid models inside the physical bounds for
+  the grid sweep.
+* **Grid sweep** is the naive baseline. It uses no information from the observation: a regular grid of *k* values per
+  axis over the four leading principal components of the original catalog (the catalog mean plus the four fixed depth
+  patterns scaled by coefficients, each coefficient ranging between its smallest and largest value in the catalog),
+  giving *k*⁴ models, of which those outside the physical bounds are skipped without a forward call. Each grid size is a
+  separate catalog built from the original one, scored by the same single backward EnsCGP update as the other methods.
 * **Seeds.** Synthetic sample *i* uses seed `base_seed + i`. A station uses `base_seed + crc32(station_id)`
   (deterministic across processes, unlike Python's `hash`).
 

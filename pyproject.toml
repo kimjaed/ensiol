@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ensiol"
-version = "0.1.0"
+version = "0.1.1"
 description = "Ensemble Incremental Online Learning (EnsIOL) for transferable 1-D magnetotelluric inversion"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -20,6 +20,7 @@ test = ["pytest"]
 ensiol-synthetic = "ensiol.experiments.synthetic:main"
 ensiol-real-data = "ensiol.experiments.real_data:main"
 ensiol-vs-mcmc = "ensiol.experiments.mcmc_comparison:main"
+ensiol-pc-sweep = "ensiol.experiments.pc_sweep:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -47,10 +47,31 @@ class Scorer:
                     nrms_rom=float(self.nrms_rom(mean_ln, obs)), nrms_mor=float(nrms_mor),
                     mean_log10=mean_l10)
 
+    # central 95% interval of the ensemble, used for the uncertainty factor U and the coverage
+    SPREAD_PERCENTILES = (2.5, 97.5)
+
+    def spread_metrics(self, labels_est: np.ndarray, truth_log10: np.ndarray) -> dict:
+        """Uncertainty factor and 95% coverage of one ensemble of estimates.
+
+        ``U`` is 10 to the half-width of the central 95% interval of the ensemble in log10 resistivity,
+        averaged over layers; ``cov95`` is the fraction of layers whose true value lies inside that
+        interval. Both exclude the half-space, as in the manuscript's tables.
+        """
+        lo, hi = np.percentile(labels_est / LN10, self.SPREAD_PERCENTILES, axis=1)
+        U = float(np.mean((10 ** (0.5 * (hi - lo)))[:-1]))
+        cov95 = float(np.mean(((truth_log10 >= lo) & (truth_log10 <= hi))[:-1]))
+        return dict(U=U, cov95=cov95)
+
     def score_catalog(self, catalog: Catalog, obs: Observation, truth_log10, seed: int, executor) -> dict:
-        """Single backward EnsCGP update on ``catalog``, scored against the truth."""
+        """Single backward EnsCGP update on ``catalog``, scored against the truth.
+
+        Returns the RMS error, both nRMS conventions, the mean profile, and the uncertainty factor
+        ``U`` and 95% coverage ``cov95`` of the ensemble.
+        """
         est = self.enscgp.estimate(obs, catalog, executor, seed=seed)
-        return self.score_mean_model(est.Labels_est.mean(axis=1), obs, truth_log10, nrms_mor=est.nRMS)
+        out = self.score_mean_model(est.Labels_est.mean(axis=1), obs, truth_log10, nrms_mor=est.nRMS)
+        out.update(self.spread_metrics(est.Labels_est, truth_log10))
+        return out
 
     def annotate_rows(self, rows, obs: Observation, truth_log10) -> list:
         """Add RMS (with and without the half-space) and both nRMS conventions to

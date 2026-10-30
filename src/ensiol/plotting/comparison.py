@@ -17,7 +17,9 @@ class ComparisonStyle:
 
     ``original_style``: ``"marker"`` draws the original catalog as a grey square left of the first
     budget, ``"line"`` as a dotted horizontal line, ``None`` omits it. ``legend_mode``: ``"below"``
-    (one shared legend under the figure) or ``"inside"`` (in panel ``legend_panel``).
+    (one shared legend under the figure) or ``"inside"`` (in panel ``legend_panel``). The naive grid
+    sweep is the third curve (orange diamonds); ``pc_sizes`` selects which grid sizes are drawn and
+    ``show_pc=False`` removes the curve.
     """
 
     layout: str = "horizontal"
@@ -39,6 +41,10 @@ class ComparisonStyle:
     ms: float = 3.0
     marker_iol: str = "o"
     marker_mc: str = "^"
+    color_pc: str = "tab:orange"
+    marker_pc: str = "D"
+    show_pc: bool = True               # naive principal-component grid baseline (when given)
+    pc_sizes: Optional[Tuple[int, ...]] = None    # grid sizes k to draw, e.g. (4, 5, 6, 7, 8, 10, 12, 13); None = all
     show_done_line: bool = True        # vertical line at EnsIOL's stopping point
     show_target_line: bool = True      # horizontal line at EnsIOL's final RMS (RMS panel only)
     show_nrms_one: bool = True         # nRMS = 1 reference
@@ -58,8 +64,10 @@ class ComparisonStyle:
     legend_mode: str = "below"
     legend_panel: int = 0
     legend_loc: str = "upper right"
+    legend_ncol: Optional[int] = None  # columns of the shared legend; None = one row (use 2 for a single column)
     label_iol: str = "EnsIOL"
     label_mc: str = "MCMC"
+    label_pc: str = "Grid sweep"
     label_orig: str = "Original catalog"
     titles: bool = False
     panel_labels: bool = False
@@ -72,13 +80,17 @@ class ComparisonStyle:
 
 def plot_comparison(ensiol: Dict[str, np.ndarray], mcmc: Dict[str, np.ndarray], n_iol: int,
                     n_mc_added: int, n_mc_calls: int, style: ComparisonStyle = ComparisonStyle(),
-                    nrms_key: str = "nrms_mor"):
+                    nrms_key: str = "nrms_mor", grid: Optional[Dict[str, np.ndarray]] = None):
     """RMS error (left) and nRMS misfit (right) against cumulative forward calls for one test case.
 
     ``ensiol`` and ``mcmc`` hold arrays ``calls``, ``rms``, ``nrms_mor``, ``nrms_rom`` (see
     :func:`ensiol.experiments.mcmc_comparison.cost_series`); the first entry of ``ensiol`` is the
     original catalog (0 calls), shown separately because a zero budget cannot sit on a log axis.
     Each point is one single backward EnsCGP update of that method's catalog at that stage.
+
+    ``grid`` (optional) holds the naive grid sweep: arrays ``sizes``, ``calls``, ``rms``, ``nrms_mor``,
+    ``nrms_rom``, one entry per grid size. Unlike the other two curves it is not a sequence of growing
+    catalogs: every point is a separate grid, scored from the starting catalog.
     """
     S = style
     plt.rcParams.update({"font.family": S.font_family, "axes.linewidth": 0.6,
@@ -90,6 +102,13 @@ def plot_comparison(ensiol: Dict[str, np.ndarray], mcmc: Dict[str, np.ndarray], 
     mc = {"rms": mcmc["rms"][pos_m], "nrms": mcmc[nrms_key][pos_m]}
     orig = {"rms": float(ensiol["rms"][0]), "nrms": float(ensiol[nrms_key][0])}
 
+    use_pc = S.show_pc and grid is not None
+    if use_pc:
+        sel = (np.ones(len(grid["calls"]), bool) if S.pc_sizes is None
+               else np.isin(grid["sizes"], list(S.pc_sizes)))
+        pc_x, pc_y = grid["calls"][sel], {"rms": grid["rms"][sel], "nrms": grid[nrms_key][sel]}
+        use_pc = pc_x.size > 0
+
     vertical = S.layout == "vertical"
     if vertical:
         fig, axes = plt.subplots(2, 1, sharex=True, figsize=(S.fig_width, 2 * S.panel_height),
@@ -97,10 +116,12 @@ def plot_comparison(ensiol: Dict[str, np.ndarray], mcmc: Dict[str, np.ndarray], 
     else:
         fig, axes = plt.subplots(1, 2, figsize=(S.fig_width, S.panel_height), gridspec_kw=dict(wspace=S.wspace))
 
-    x_orig = min(iol_x.min(), mc_x.min()) * 0.75
+    x_orig = min([iol_x.min(), mc_x.min()] + ([pc_x.min()] if use_pc else [])) * 0.75
     for ax, key in zip(axes, ("rms", "nrms")):
         ax.plot(iol_x, iol[key], S.marker_iol + "-", color=S.color_iol, lw=S.lw, ms=S.ms, label=S.label_iol, zorder=5)
         ax.plot(mc_x, mc[key], S.marker_mc + "-", color=S.color_mc, lw=S.lw, ms=S.ms, label=S.label_mc, zorder=4)
+        if use_pc:
+            ax.plot(pc_x, pc_y[key], S.marker_pc + "-", color=S.color_pc, lw=S.lw, ms=S.ms, label=S.label_pc, zorder=3)
         if S.original_style == "marker":
             ax.plot(x_orig, orig[key], "s", color=S.color_orig, ms=S.ms + 1.5, label=S.label_orig)
         elif S.original_style == "line":
@@ -139,6 +160,8 @@ def plot_comparison(ensiol: Dict[str, np.ndarray], mcmc: Dict[str, np.ndarray], 
 
     handles = [Line2D([], [], color=S.color_iol, marker=S.marker_iol, lw=S.lw, ms=S.ms, label=S.label_iol),
                Line2D([], [], color=S.color_mc, marker=S.marker_mc, lw=S.lw, ms=S.ms, label=S.label_mc)]
+    if use_pc:
+        handles.append(Line2D([], [], color=S.color_pc, marker=S.marker_pc, lw=S.lw, ms=S.ms, label=S.label_pc))
     if S.original_style == "marker":
         handles.append(Line2D([], [], color=S.color_orig, marker="s", ls="none", ms=S.ms + 1.5, label=S.label_orig))
     elif S.original_style == "line":
@@ -151,7 +174,7 @@ def plot_comparison(ensiol: Dict[str, np.ndarray], mcmc: Dict[str, np.ndarray], 
         renderer = fig.canvas.get_renderer()
         to_fig = fig.transFigure.inverted()
         y_low = min(to_fig.transform(ax.get_tightbbox(renderer))[0, 1] for ax in axes)
-        fig.legend(handles=handles, loc="upper center", ncol=len(handles), fontsize=S.fs_legend,
+        fig.legend(handles=handles, loc="upper center", ncol=S.legend_ncol or len(handles), fontsize=S.fs_legend,
                    bbox_to_anchor=(0.5, y_low - 2 / 72 / fig.get_figheight()), frameon=False,
                    borderaxespad=0, handlelength=2.0, columnspacing=1.5)
     if S.panel_labels:

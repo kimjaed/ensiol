@@ -8,6 +8,10 @@ For EnsIOL the catalog at budget ``B`` is the original catalog plus its first
 ``B`` additions (each addition costs exactly one forward call; the surrogate
 loop makes none). Beyond EnsIOL's own total, its final catalog is used.
 
+With ``pc_grid=True`` the naive principal-component grid sweep (see :mod:`ensiol.experiments.pc_sweep`) is
+scored for the same sample and stored as ``pcgrid_*`` fields: one point per grid size, each its own grid
+scored from the starting catalog. Cached results of the cluster sweep are reused when ``pc_dir`` has them.
+
 ``ensiol_budgets``:
   ``"grid"``        EnsIOL scored on the same budget grid as MCMC (the 100-sample comparison);
   ``"iterations"``  EnsIOL scored at its own cumulative call count after every iteration
@@ -32,15 +36,21 @@ from .base import Experiment
 
 DEFAULT_BUDGETS = [0, 50, 100, 150, 200, 300, 400, 500, 700, 1000, 1500, 2000, 3000,
                    5000, 7000, 10000, 15000, 20000]
-METRICS = ("calls", "catalog_added", "rms", "nrms_rom", "nrms_mor")
+METRICS = ("calls", "catalog_added", "rms", "nrms_rom", "nrms_mor", "U", "cov95")
 
 
 def cost_series(rec: dict, method: str, ensiol_budgets: str = "grid"):
-    """Arrays for :func:`cost_figure`: the original catalog (0 calls) first, then the points.
+    """Arrays for :func:`ensiol.plotting.plot_comparison`.
 
-    In ``grid`` mode EnsIOL's budgets above its own total repeat its final catalog, so
-    its curve is drawn up to the budget below its total and then its own final point.
+    ``"ensiol"`` and ``"mcmc"``: the original catalog (0 calls) first, then the points. In ``grid`` mode
+    EnsIOL's budgets above its own total repeat its final catalog, so its curve is drawn up to the budget
+    below its total and then its own final point. ``"pcgrid"``: one point per grid size (no zero entry),
+    with the grid sizes in ``sizes``; needs the ``pcgrid_*`` fields of a record made with ``pc_grid=True``.
     """
+    if method == "pcgrid":
+        return dict(sizes=np.asarray(rec["pcgrid_sizes"]), calls=np.asarray(rec["pcgrid_calls"]),
+                    rms=np.asarray(rec["pcgrid_rms"]), nrms_rom=np.asarray(rec["pcgrid_nrms_rom"]),
+                    nrms_mor=np.asarray(rec["pcgrid_nrms_mor"]))
     if method == "mcmc":
         return {k: rec[f"mcmc_catalog_{k}"] for k in ("calls", "rms", "nrms_rom", "nrms_mor")}
     out = {k: np.asarray(rec[f"ensiol_{k}"]) for k in ("calls", "rms", "nrms_rom", "nrms_mor")}
@@ -58,10 +68,12 @@ def cost_series(rec: dict, method: str, ensiol_budgets: str = "grid"):
 
 class EnsIOLvsMCMC(Experiment):
     def __init__(self, ctx: ExperimentContext, out_dir: str, ensiol_dir: str = None, ensiol_budgets: str = "grid",
-                 budgets: Sequence[int] = None, make_figures: bool = True, **kw):
+                 budgets: Sequence[int] = None, make_figures: bool = True, pc_grid: bool = False,
+                 pc_dir: str = None, **kw):
         super().__init__(out_dir, **kw)
         assert ctx.test is not None, "context was built without a test set"
         self.ctx, self.ensiol_dir, self.mode, self.make_figures = ctx, ensiol_dir, ensiol_budgets, make_figures
+        self.pc_grid, self.pc_dir = pc_grid, pc_dir
         mc = ctx.pcn.max_calls
         b = [x for x in (budgets or DEFAULT_BUDGETS) if x <= mc]
         self.budgets = b if b[-1] == mc else b + [mc]
@@ -80,6 +92,21 @@ class EnsIOLvsMCMC(Experiment):
             return (r["added_Labels"], r["added_AppRes_log"], r["added_Phase"], r["hist_n_accepted"], "loaded")
         run = self.ctx.augment(case.observation, seed, truth_linear=case.truth_linear)
         return (*run.additions, run.growth.n_accepted, "rerun")
+
+    def prepare(self, todo) -> None:
+        """Simulate the grids once, before the workers fork, if the sweep is requested."""
+        if self.pc_grid:
+            print("simulating the PC grids (once, shared by all samples):", flush=True)
+            self.ctx.pc_sweep.build_grids()
+
+    def _pc_grid_scores(self, idx, truth_log10, base, obs, seed, ex):
+        """Grid-sweep scores of this sample: cached cluster result if present, else computed here."""
+        f = f"{self.pc_dir}/sample_{idx:03d}.npz" if self.pc_dir else None
+        if f and os.path.exists(f):
+            z = dict(np.load(f, allow_pickle=True))
+            assert np.allclose(z["truth_log10"], truth_log10), "cached PC-grid record does not match this sample"
+            return z, "loaded"
+        return self.ctx.pc_sweep.evaluate(base, obs, truth_log10, seed, ex), "computed"
 
     def run_item(self, idx: int) -> dict:
         t0 = time.time()
@@ -121,13 +148,24 @@ class EnsIOLvsMCMC(Experiment):
             for key in METRICS:
                 out[f"{m}_{key}"] = np.array([r[key] for r in lst])
             out[f"{m}_mean_log10"] = np.array([r["mean_log10"] for r in lst])
+        if self.pc_grid:
+            pcr, pc_src = self._pc_grid_scores(idx, truth, base, obs, seed, ex)
+            assert np.isclose(float(pcr["orig_rms"]), rows["ensiol"][0]["rms"], atol=1e-6), \
+                "original-catalog score differs from the PC-grid result: different estimator, seed or data?"
+            out.update(pcgrid_source=pc_src, pcgrid_sizes=pcr["grid_sizes"], pcgrid_calls=pcr["grid_calls"],
+                       pcgrid_catalog_added=pcr["grid_added"], pcgrid_nbr_share=pcr["grid_nbr_share"],
+                       pcgrid_mean_log10=pcr["grid_mean_log10"])
+            for key in ("rms", "nrms_rom", "nrms_mor", "U", "cov95"):
+                if f"grid_{key}" in pcr:              # results of older cluster runs have no U and cov95
+                    out[f"pcgrid_{key}"] = pcr[f"grid_{key}"]
         out["runtime_s"] = time.time() - t0
         if self.make_figures:
             nk = "nrms_" + ctx.scoring.nrms_convention.lower()
             diag = ComparisonStyle(fig_width=12, panel_height=4.8, fs_label=10, fs_tick=9, fs_legend=9, ms=4,
                                    titles=True, annotate_done=True, annotate_kept=True)
             fig = plot_comparison(cost_series(out, "ensiol", self.mode), cost_series(out, "mcmc"), n_iol,
-                                  mc.total_added, mc.total_calls, diag, nrms_key=nk)
+                                  mc.total_added, mc.total_calls, diag, nrms_key=nk,
+                                  grid=cost_series(out, "pcgrid") if self.pc_grid else None)
             fig.suptitle(f"Sample {idx}")
             fig.savefig(f"{self.out_dir}/trajectory_figs/accuracy_vs_cost_sample_{idx:03d}.png", dpi=150)
             plt.close(fig)
@@ -147,12 +185,16 @@ class EnsIOLvsMCMC(Experiment):
         methods = [("ensiol", "EnsIOL (catalog)", "C0", "budgets_ensiol"), ("mcmc_catalog", "MCMC (catalog)", "C2", "budgets_mcmc")]
         with open(f"{self.out_dir}/results_long.csv", "w", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["sample_idx", "method", "budget", "forward_calls", "catalog_added", "RMS_log10", "nRMS_RoM", "nRMS_MoR"])
+            w.writerow(["sample_idx", "method", "budget", "forward_calls", "catalog_added", "RMS_log10", "nRMS_RoM", "nRMS_MoR",
+                        "U", "cov95"])
             for r in recs:
                 for m, _, _, bk in methods:
                     for j, B in enumerate(r[bk]):
+                        # U and cov95 are missing from records written before they were scored
+                        u = r[f"{m}_U"][j] if f"{m}_U" in r else ""
+                        c = r[f"{m}_cov95"][j] if f"{m}_cov95" in r else ""
                         w.writerow([int(r["sample_idx"]), m, int(B), int(r[f"{m}_calls"][j]), int(r[f"{m}_catalog_added"][j]),
-                                    r[f"{m}_rms"][j], r[f"{m}_nrms_rom"][j], r[f"{m}_nrms_mor"][j]])
+                                    r[f"{m}_rms"][j], r[f"{m}_nrms_rom"][j], r[f"{m}_nrms_mor"][j], u, c])
         if not all(np.array_equal(r["budgets_ensiol"], r["budgets_mcmc"]) for r in recs):
             print("per-method budget grids differ (iterations mode): skipping the pooled summary")
             return
@@ -188,6 +230,10 @@ def main(argv=None):
     p.add_argument("--samples", type=int, nargs="*", default=None)
     p.add_argument("--workers", type=int, default=None)
     p.add_argument("--mcmc-max-calls", type=int, default=20000)
+    p.add_argument("--pc-grid", action="store_true",
+                   help="also score the naive principal-component grid sweep for each sample (stored as pcgrid_*)")
+    p.add_argument("--pc-dir", default=None,
+                   help="per_sample folder of run_pc_sweep_baseline.py (its results are reused if present)")
     p.add_argument("--no-figures", action="store_true")
     p.add_argument("--no-resume", action="store_true")
     p.add_argument("--collect-only", action="store_true")
@@ -196,10 +242,12 @@ def main(argv=None):
     from ..baselines import PCNConfig
     ctx = ExperimentContext.from_data_dir(a.data_dir, with_test=True, pcn=PCNConfig(max_calls=a.mcmc_max_calls))
     exp = EnsIOLvsMCMC(ctx, a.out_dir, ensiol_dir=a.ensiol_dir, ensiol_budgets=a.ensiol_budgets,
-                       make_figures=not a.no_figures, resume=not a.no_resume, workers=a.workers)
+                       make_figures=not a.no_figures, pc_grid=a.pc_grid, pc_dir=a.pc_dir,
+                       resume=not a.no_resume, workers=a.workers)
     items = list(range(len(ctx.test))) if a.samples is None else a.samples
     with open(f"{a.out_dir}/run_config.json", "w") as f:
         json.dump(dict(data_dir=a.data_dir, ensiol_dir=a.ensiol_dir, ensiol_budgets=a.ensiol_budgets, pcn=ctx.pcn.to_dict(),
+                       pc_grid=ctx.pc_grid.to_dict() if a.pc_grid else None, pc_dir=a.pc_dir,
                        budgets=exp.budgets, config=ctx.config.to_dict(), d_min=ctx.d_min,
                        ESTIMATOR="single backward EnsCGP update (no correction)",
                        prior="Gaussian, catalog mean/cov, truncated to [5e-3, 5e5] ohm-m", sampler="pCN"), f, indent=2)

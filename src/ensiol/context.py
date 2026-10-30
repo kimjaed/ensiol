@@ -14,7 +14,7 @@ from typing import List, Optional
 
 import numpy as np
 
-from .baselines import PCNConfig, PCNSampler
+from .baselines import PCGridConfig, PCGridSweep, PCNConfig, PCNSampler
 from .catalog import Catalog, MinDistanceCalibrator, Whitener
 from .config import EnsIOLConfig, ScoringConfig
 from .data import Grid, KilaueaDataset, Observation, PriorEnsemble
@@ -78,8 +78,10 @@ class AugmentationRun:
 
 class ExperimentContext:
     def __init__(self, grid: Grid, prior: PriorEnsemble, config: EnsIOLConfig = EnsIOLConfig(),
-                 scoring: ScoringConfig = ScoringConfig(), pcn: PCNConfig = PCNConfig(), verbose: bool = True):
+                 scoring: ScoringConfig = ScoringConfig(), pcn: PCNConfig = PCNConfig(),
+                 pc_grid: PCGridConfig = PCGridConfig(), verbose: bool = True):
         self.grid, self.prior, self.config, self.scoring, self.pcn = grid, prior, config, scoring, pcn
+        self.pc_grid = pc_grid
         self.forward = grid.forward_operator()
         self.whitener = Whitener.from_labels(prior.labels)
         self.d_min = MinDistanceCalibrator(config.d_min_quantile, config.d_min_frac, config.n_probe,
@@ -89,6 +91,8 @@ class ExperimentContext:
         self.scorer = Scorer(self.forward, self.enscgp, scoring)
         self.snapshots = SnapshotEvaluator(self.enscgp)
         self.sampler = PCNSampler(self.forward, config, self.whitener, self.d_min, pcn)
+        self.pc_sweep = PCGridSweep(self.forward, config, self.whitener, self.d_min, self.scorer, self.enscgp,
+                                    grid.freqs, prior.labels, pc_grid)
         self.test = None
         if verbose:
             print(f"prior catalog: {len(prior)} members | {grid.n_layers} layers | "

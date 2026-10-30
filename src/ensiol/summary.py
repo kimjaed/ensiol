@@ -1,9 +1,9 @@
 """Summary statistics and LaTeX tables for the letter.
 
-Reads the outputs of the three experiments (``all_samples.npz`` from the synthetic run,
-``results_long.csv`` from the EnsIOL-vs-MCMC run, ``station_summary.csv`` and the per-station
-files from the real-data run) and writes Table I (synthetic), Table II (field) and a text
-summary of every number quoted in the manuscript.
+Reads the outputs of the experiments (``all_samples.npz`` from the synthetic run,
+``results_long.csv`` from the EnsIOL-vs-MCMC run, ``results_long.csv`` from the naive grid sweep,
+``station_summary.csv`` and the per-station files from the real-data run) and writes Table I
+(synthetic), Table II (field) and a text summary of every number quoted in the manuscript.
 
 Definitions
   RMS error   root mean square over layers of (ensemble-mean log10 resistivity - true log10 resistivity),
@@ -16,6 +16,9 @@ Definitions
               central 95% interval of the ensemble. Needs ground truth, so synthetic only.
   Matched     for each sample the MCMC catalog is scored at the first budget of the MCMC grid that is at
               or above the number of forward calls EnsIOL used for that sample.
+  Grid sweep  the naive baseline: a regular grid of k values per axis over the four leading principal
+              components of the original catalog, with no information from the observation. Each grid
+              size is a separate catalog; its forward calls are the models inside the physical bounds.
 """
 from __future__ import annotations
 
@@ -94,17 +97,46 @@ class McmcResults:
     @classmethod
     def from_csv(cls, path: str, syn: SyntheticResults) -> "McmcResults":
         R = collections.defaultdict(dict)
-        for r in csv.DictReader(open(path)):
-            R[(r["method"], int(r["sample_idx"]))][int(r["budget"])] = {
-                k: float(r[k]) for k in ("forward_calls", "RMS_log10", "nRMS_MoR")}
+        reader = csv.DictReader(open(path))
+        has_spread = {"U", "cov95"} <= set(reader.fieldnames or [])
+        for r in reader:
+            vals = {k: float(r[k]) for k in ("forward_calls", "RMS_log10", "nRMS_MoR")}
+            if has_spread and r["U"] != "" and r["cov95"] != "":       # empty in files from older runs
+                vals["U"], vals["cov95"] = float(r["U"]), float(r["cov95"])
+            R[(r["method"], int(r["sample_idx"]))][int(r["budget"])] = vals
         budgets = sorted({b for v in R.values() for b in v})
         idx = syn.sample_idx
         matched = [min(b for b in budgets if b >= n) for n in syn.n_added]
+        have_spread = all("U" in d for v in R.values() for d in v.values())
         out = {}
         for name, bs in (("matched", matched), ("max", [budgets[-1]] * len(idx))):
             g = lambda key: np.array([R[("mcmc_catalog", i)][b][key] for i, b in zip(idx, bs)])
             out[name] = dict(calls=g("forward_calls"), rms=g("RMS_log10"), nrms=g("nRMS_MoR"))
+            if have_spread:
+                out[name].update(U=g("U"), cov95=g("cov95"))
         return cls(out["matched"], out["max"], budgets[-1])
+
+
+@dataclass
+class GridResults:
+    """Naive grid sweep, one entry per grid size ``k``; each array has one value per test sample."""
+
+    by_size: Dict[int, Dict[str, np.ndarray]]
+
+    @property
+    def sizes(self) -> List[int]:
+        return sorted(self.by_size)
+
+    @classmethod
+    def from_csv(cls, path: str) -> "GridResults":
+        rows = collections.defaultdict(lambda: collections.defaultdict(list))
+        for r in csv.DictReader(open(path)):
+            d = rows[int(r["grid_size_k"])]
+            for key, col in (("calls", "forward_calls"), ("added", "catalog_added"), ("rms", "RMS_log10"),
+                             ("nrms", "nRMS_MoR"), ("U", "U"), ("cov95", "cov95"),
+                             ("rms0", "RMS_original"), ("nrms0", "nRMS_MoR_original")):
+                d[key].append(float(r[col]))
+        return cls({k: {key: np.array(v) for key, v in d.items()} for k, d in rows.items()})
 
 
 @dataclass
@@ -180,9 +212,11 @@ class MetricsReport:
 
     def __init__(self, synthetic: str, mcmc: Optional[str] = None, stations: Optional[str] = None,
                  per_station_dir: Optional[str] = None, depth_interfaces: Optional[str] = None,
-                 prior_catalog: Optional[str] = None, out_dir: str = "./tables", echo=print):
+                 prior_catalog: Optional[str] = None, out_dir: str = "./tables", echo=print,
+                 pc_sweep: Optional[str] = None, pc_sizes=(7, 13)):
         self.paths = dict(synthetic=synthetic, mcmc=mcmc, stations=stations, per_station_dir=per_station_dir,
-                          depth_interfaces=depth_interfaces, prior_catalog=prior_catalog)
+                          depth_interfaces=depth_interfaces, prior_catalog=prior_catalog, pc_sweep=pc_sweep)
+        self.pc_sizes = tuple(pc_sizes)
         self.out_dir, self.echo, self.log = out_dir, echo, []
 
     def P(self, s: str = "") -> None:
@@ -225,13 +259,34 @@ class MetricsReport:
         if self.paths["mcmc"]:
             mc = McmcResults.from_csv(self.paths["mcmc"], syn)
             for m, label in ((mc.matched, "MCMC catalog, matched calls"), (mc.max, f"MCMC catalog, {mc.max_budget} calls")):
+                u = f"{m['U'].mean():.2f}" if "U" in m else "--"
+                c = f"{100 * m['cov95'].mean():.0f}%" if "cov95" in m else "--"
                 rows.append([label, f"{m['calls'].mean():.0f}", fmt2(mean_med(m["rms"])), fmt2(mean_med(m["nrms"])),
-                             f"{int((m['rms'] < b.rms).sum())}/{int((m['nrms'] < b.nrms).sum())}", "--", "--"])
+                             f"{int((m['rms'] < b.rms).sum())}/{int((m['nrms'] < b.nrms).sum())}", u, c])
+                if "U" in m:
+                    P(f"  {label}: U {m['U'].mean():.2f}; coverage 95% {m['cov95'].mean():.3f}")
                 P(f"  {label}: mean calls {m['calls'].mean():.0f}; RMS mean {m['rms'].mean():.3f} (median {np.median(m['rms']):.3f}); "
                   f"nRMS mean {m['nrms'].mean():.3f} (median {np.median(m['nrms']):.3f}); "
                   f"EnsIOL lower RMS in {int((e.rms < m['rms']).sum())}/{n}, lower nRMS in {int((e.nrms < m['nrms']).sum())}/{n}; "
                   f"MCMC reaches EnsIOL's RMS in {int((m['rms'] <= e.rms).sum())}/{n}, its nRMS in {int((m['nrms'] <= e.nrms).sum())}/{n}")
             P(f"  call ratio ({mc.max_budget} / EnsIOL mean): {mc.max_budget / ne.mean():.1f}")
+        if self.paths["pc_sweep"]:
+            grid = GridResults.from_csv(self.paths["pc_sweep"])
+            P(f"  grid sweep sizes available: {grid.sizes}")
+            for k in self.pc_sizes:
+                if k not in grid.by_size:
+                    P(f"  grid sweep k={k}: not in {self.paths['pc_sweep']}, row skipped")
+                    continue
+                g = grid.by_size[k]
+                rows.append([f"Grid sweep (k={k})", f"{g['calls'].mean():.0f}", fmt2(mean_med(g["rms"])),
+                             fmt2(mean_med(g["nrms"])), f"{int((g['rms'] < g['rms0']).sum())}/{int((g['nrms'] < g['nrms0']).sum())}",
+                             f"{g['U'].mean():.2f}", f"{100 * g['cov95'].mean():.0f}%"])
+                P(f"  grid sweep k={k}: mean calls {g['calls'].mean():.0f} (added {g['added'].mean():.0f}); "
+                  f"RMS mean {g['rms'].mean():.3f} (median {np.median(g['rms']):.3f}); "
+                  f"nRMS mean {g['nrms'].mean():.3f} (median {np.median(g['nrms']):.3f}); "
+                  f"U {g['U'].mean():.2f}; coverage 95% {g['cov95'].mean():.3f}; "
+                  f"lower RMS than the original catalog in {int((g['rms'] < g['rms0']).sum())}/{len(g['rms'])}; "
+                  f"EnsIOL lower RMS in {int((e.rms < g['rms']).sum())}/{n}, lower nRMS in {int((e.nrms < g['nrms']).sum())}/{n}")
         t = Table(hdr, rows, "lccccrr")
         t.write_csv(f"{self.out_dir}/table_synthetic.csv")
         t.write_tex(f"{self.out_dir}/table_synthetic.tex")
